@@ -30,19 +30,25 @@ class VideoProcessor {
   }
 
   async uploadToS3(localDir, s3Prefix) {
-    const files = await fs.readdir(localDir);
+    const files = await fs.readdir(localDir, { withFileTypes: true });
     const uploadPromises = [];
 
     for (const file of files) {
-      if (file.endsWith(".m3u8") || file.endsWith(".ts")) {
-        const localPath = path.join(localDir, file);
-        const s3Key = `${s3Prefix}/${file}`;
+      const localPath = path.join(localDir, file.name);
+      if (file.isDirectory()) {
+        // Recursively upload subdirectories
+        const subPrefix = `${s3Prefix}/${file.name}`;
+        uploadPromises.push(this.uploadToS3(localPath, subPrefix));
+      } else if (file.name.endsWith(".m3u8") || file.name.endsWith(".ts")) {
+        const s3Key = `${s3Prefix}/${file.name}`;
         const fileContent = await fs.readFile(localPath);
         const command = new PutObjectCommand({
           Bucket: BUCKET_NAME,
           Key: s3Key,
           Body: fileContent,
-          ContentType: file.endsWith(".m3u8") ? "application/vnd.apple.mpegurl" : "video/mp2t"
+          ContentType: file.name.endsWith(".m3u8")
+            ? "application/vnd.apple.mpegurl"
+            : "video/mp2t",
         });
         uploadPromises.push(s3Client.send(command));
       }
