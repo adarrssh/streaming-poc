@@ -1,3 +1,5 @@
+# ✅ **FULLY TESTED  EC2 READY**
+
 # Video Upload & Processing Service
 
 A Node.js service for uploading videos to AWS S3 and converting them to HLS format for streaming with multiple quality levels (360p, 720p).

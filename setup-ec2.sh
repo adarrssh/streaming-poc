@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# EC2 Setup Script for Video Processing Service
-# Run this script on your EC2 instance after cloning the repository
+# EC2 Setup Script for Video Processing Service (Ubuntu)
+# Run this script on your EC2 Ubuntu instance after cloning the repository
 
-echo "=== Setting up EC2 for Video Processing ==="
+echo "=== Setting up EC2 Ubuntu for Video Processing ==="
 
 # Update system packages
 echo "Updating system packages..."
-sudo yum update -y
+sudo apt update && sudo apt upgrade -y
 
 # Install Node.js and npm (if not already installed)
 echo "Installing Node.js..."
@@ -18,7 +18,7 @@ nvm use 18
 
 # Install FFmpeg
 echo "Installing FFmpeg..."
-sudo yum install -y ffmpeg ffmpeg-devel
+sudo apt install -y ffmpeg
 
 # Verify FFmpeg installation
 echo "Verifying FFmpeg installation..."
@@ -32,6 +32,7 @@ npm install
 echo "Setting up temp directory..."
 sudo mkdir -p /tmp/video-processing
 sudo chmod 755 /tmp/video-processing
+sudo chown ubuntu:ubuntu /tmp/video-processing
 
 # Set up environment variables (you'll need to edit this)
 echo "Setting up environment variables..."
@@ -51,7 +52,7 @@ EOF
     echo "Please edit .env file with your actual AWS credentials and configuration"
 fi
 
-echo "=== EC2 Setup Complete ==="
+echo "=== EC2 Ubuntu Setup Complete ==="
 echo ""
 echo "Next steps:"
 echo "1. Edit .env file with your AWS credentials"
