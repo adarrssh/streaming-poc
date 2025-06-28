@@ -49,6 +49,7 @@ class VideoProcessor {
           ContentType: file.name.endsWith(".m3u8")
             ? "application/vnd.apple.mpegurl"
             : "video/mp2t",
+          ACL: "public-read"
         });
         uploadPromises.push(s3Client.send(command));
       }
