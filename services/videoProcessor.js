@@ -95,14 +95,12 @@ class VideoProcessor {
   async generateMasterPlaylist(outputDir, s3Prefix, videoId) {
     const qualities = ["360p", "720p"];
     let masterContent = "#EXTM3U\n#EXT-X-VERSION:3\n";
-
+  
     qualities.forEach((quality) => {
       const bandwidth = quality === "360p" ? "500000" : "2000000";
       const resolution = quality === "360p" ? "640x360" : "1280x720";
-      masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution}
-`;
-      masterContent += `${s3Prefix}/${quality}/playlist.m3u8
-`;
+      masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution}\n`;
+      masterContent += `${quality}/playlist.m3u8\n`; // ✅ Relative path
     });
 
     const masterPath = path.join(outputDir, "master.m3u8");
