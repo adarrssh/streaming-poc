@@ -4,6 +4,7 @@ const multerS3 = require('multer-s3');
 const { v4: uuidv4 } = require('uuid');
 const { s3, BUCKET_NAME, generateUploadUrl, fileExists, getFileMetadata } = require('../config/aws');
 const videoProcessor = require('../services/videoProcessor');
+const backgroundProcessor = require('../services/backgroundProcessor');
 
 const router = express.Router();
 
@@ -92,7 +93,7 @@ router.post('/video', upload.single('video'), async (req, res) => {
   }
 });
 
-// Convert video to HLS endpoint
+// Convert video to HLS endpoint (now asynchronous)
 router.post('/convert-to-hls/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
@@ -112,22 +113,56 @@ router.post('/convert-to-hls/:videoId', async (req, res) => {
       });
     }
 
-    // Start HLS conversion
-    console.log(`Starting HLS conversion for video ${videoId}`);
-    
-    const result = await videoProcessor.convertVideoToHLS(s3Key, videoId);
+    // Start background encoding job
+    const result = await backgroundProcessor.startEncodingJob(videoId, s3Key);
 
     res.json({
-      message: 'Video converted to HLS successfully',
+      message: 'Video encoding started successfully',
       videoId: result.videoId,
-      masterPlaylist: result.masterPlaylist,
-      streamingUrls: result.streamingUrls
+      status: result.status,
+      monitorProgress: `GET /api/upload/status/${videoId}`,
+      cloudWatchLogs: `Check CloudWatch logs for video-${videoId} stream`
     });
 
   } catch (error) {
     console.error('HLS conversion error:', error);
     res.status(500).json({ 
-      error: 'Failed to convert video to HLS',
+      error: 'Failed to start video encoding',
+      message: error.message 
+    });
+  }
+});
+
+// Get encoding status for a video
+router.get('/status/:videoId', async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    const status = backgroundProcessor.getJobStatus(videoId);
+
+    res.json(status);
+
+  } catch (error) {
+    console.error('Error getting status:', error);
+    res.status(500).json({ 
+      error: 'Failed to get encoding status',
+      message: error.message 
+    });
+  }
+});
+
+// Get all active encoding jobs
+router.get('/jobs', async (req, res) => {
+  try {
+    const jobs = backgroundProcessor.getAllJobs();
+    res.json({
+      totalJobs: jobs.length,
+      jobs: jobs
+    });
+
+  } catch (error) {
+    console.error('Error getting jobs:', error);
+    res.status(500).json({ 
+      error: 'Failed to get encoding jobs',
       message: error.message 
     });
   }
@@ -137,9 +172,38 @@ router.post('/convert-to-hls/:videoId', async (req, res) => {
 router.get('/streaming/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
-    const s3Prefix = `hls/${videoId}`;
     
-    // Check if master playlist exists
+    // First check if encoding is complete
+    const status = backgroundProcessor.getJobStatus(videoId);
+    
+    if (status.status === 'processing') {
+      return res.status(202).json({
+        message: 'Video is still being encoded',
+        videoId,
+        status: status.status,
+        progress: status.progress,
+        checkStatus: `GET /api/upload/status/${videoId}`
+      });
+    }
+    
+    if (status.status === 'failed') {
+      return res.status(500).json({
+        error: 'Video encoding failed',
+        videoId,
+        error: status.error
+      });
+    }
+    
+    if (status.status === 'completed' && status.streamingUrls) {
+      return res.json({
+        videoId,
+        status: 'completed',
+        streamingUrls: status.streamingUrls
+      });
+    }
+
+    // Fallback: check if master playlist exists in S3
+    const s3Prefix = `hls/${videoId}`;
     const masterKey = `${s3Prefix}/master.m3u8`;
     const exists = await fileExists(masterKey);
     
@@ -159,6 +223,7 @@ router.get('/streaming/:videoId', async (req, res) => {
 
     res.json({
       videoId,
+      status: 'completed',
       streamingUrls
     });
 
@@ -202,8 +267,9 @@ router.post('/presigned-url', async (req, res) => {
       uploadUrl,
       key,
       expiresIn: 3600,
-      fields: {
-        'Content-Type': contentType
+      nextSteps: {
+        convertToHls: `POST /api/upload/convert-to-hls/${uniqueId}`,
+        body: { s3Key: key }
       }
     });
 
@@ -211,34 +277,6 @@ router.post('/presigned-url', async (req, res) => {
     console.error('Error generating pre-signed URL:', error);
     res.status(500).json({ 
       error: 'Failed to generate upload URL',
-      message: error.message 
-    });
-  }
-});
-
-// Check upload status
-router.get('/status/:key', async (req, res) => {
-  try {
-    const { key } = req.params;
-    
-    const exists = await fileExists(key);
-    
-    if (exists) {
-      const metadata = await getFileMetadata(key);
-      res.json({
-        exists: true,
-        metadata
-      });
-    } else {
-      res.json({
-        exists: false
-      });
-    }
-
-  } catch (error) {
-    console.error('Error checking upload status:', error);
-    res.status(500).json({ 
-      error: 'Failed to check upload status',
       message: error.message 
     });
   }

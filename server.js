@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const uploadRoutes = require('./routes/uploadRoutes');
+const backgroundProcessor = require('./services/backgroundProcessor');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -44,7 +45,8 @@ app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'OK', 
     message: 'Video upload service is running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    activeJobs: backgroundProcessor.getAllJobs().length
   });
 });
 
@@ -53,9 +55,16 @@ app.get('/', (req, res) => {
   res.json({
     message: 'Video Upload Service',
     version: '1.0.0',
+    features: {
+      asyncEncoding: true,
+      cloudWatchLogging: true,
+      progressTracking: true
+    },
     endpoints: {
       health: '/health',
-      upload: '/api/upload'
+      upload: '/api/upload',
+      status: '/api/upload/status/:videoId',
+      jobs: '/api/upload/jobs'
     }
   });
 });
@@ -74,8 +83,15 @@ app.use('*', (req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
+// Cleanup job scheduler (run every 30 minutes)
+setInterval(() => {
+  backgroundProcessor.cleanupCompletedJobs();
+}, 30 * 60 * 1000);
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📤 Video upload service ready`);
+  console.log(`🔄 Background processing enabled`);
+  console.log(`📊 CloudWatch logging enabled`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
 }); 

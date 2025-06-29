@@ -29,6 +29,37 @@ class VideoProcessor {
     });
   }
 
+  async prepareOutputDir(videoId) {
+    const outputDir = path.join(this.tempDir, videoId);
+    await fs.ensureDir(outputDir);
+    return outputDir;
+  }
+
+  async convertQuality(inputPath, outputDir, quality) {
+    return new Promise((resolve, reject) => {
+      const qualityDir = path.join(outputDir, quality.name);
+      fs.ensureDirSync(qualityDir);
+      
+      const command = ffmpeg(inputPath)
+        .output(path.join(qualityDir, "playlist.m3u8"))
+        .outputOptions([
+          `-c:v libx264`,
+          `-c:a aac`,
+          `-b:v ${quality.bitrate}`,
+          `-maxrate ${quality.bitrate}`,
+          `-bufsize ${parseInt(quality.bitrate) * 2}k`,
+          `-vf scale=${quality.resolution}`,
+          `-hls_time 6`,
+          `-hls_list_size 0`,
+          `-hls_segment_filename ${qualityDir}/segment_%03d.ts`,
+          `-f hls`
+        ])
+        .on("end", () => resolve())
+        .on("error", (err) => reject(err))
+        .run();
+    });
+  }
+
   async uploadToS3(localDir, s3Prefix) {
     const files = await fs.readdir(localDir, { withFileTypes: true });
     const uploadPromises = [];
@@ -54,42 +85,6 @@ class VideoProcessor {
       }
     }
     await Promise.all(uploadPromises);
-  }
-
-  async convertToHLS(inputPath, outputDir, videoId) {
-    return new Promise((resolve, reject) => {
-      const qualities = [
-        { name: "360p", resolution: "640x360", bitrate: "500k" },
-        { name: "720p", resolution: "1280x720", bitrate: "2000k" }
-      ];
-
-      let command = ffmpeg(inputPath);
-
-      qualities.forEach((quality) => {
-        const qualityDir = path.join(outputDir, quality.name);
-        fs.ensureDirSync(qualityDir);
-        
-        command = command
-          .output(path.join(qualityDir, "playlist.m3u8"))
-          .outputOptions([
-            `-c:v libx264`,
-            `-c:a aac`,
-            `-b:v ${quality.bitrate}`,
-            `-maxrate ${quality.bitrate}`,
-            `-bufsize ${parseInt(quality.bitrate) * 2}k`,
-            `-vf scale=${quality.resolution}`,
-            `-hls_time 6`,
-            `-hls_list_size 0`,
-            `-hls_segment_filename ${qualityDir}/segment_%03d.ts`,
-            `-f hls`
-          ]);
-      });
-
-      command
-        .on("end", () => resolve())
-        .on("error", (err) => reject(err))
-        .run();
-    });
   }
 
   async generateMasterPlaylist(outputDir, s3Prefix, videoId) {
@@ -125,6 +120,43 @@ class VideoProcessor {
     } catch (error) {
       console.warn("Cleanup warning:", error.message);
     }
+  }
+
+  // Legacy method for backward compatibility
+  async convertToHLS(inputPath, outputDir, videoId) {
+    return new Promise((resolve, reject) => {
+      const qualities = [
+        { name: "360p", resolution: "640x360", bitrate: "500k" },
+        { name: "720p", resolution: "1280x720", bitrate: "2000k" }
+      ];
+
+      let command = ffmpeg(inputPath);
+
+      qualities.forEach((quality) => {
+        const qualityDir = path.join(outputDir, quality.name);
+        fs.ensureDirSync(qualityDir);
+        
+        command = command
+          .output(path.join(qualityDir, "playlist.m3u8"))
+          .outputOptions([
+            `-c:v libx264`,
+            `-c:a aac`,
+            `-b:v ${quality.bitrate}`,
+            `-maxrate ${quality.bitrate}`,
+            `-bufsize ${parseInt(quality.bitrate) * 2}k`,
+            `-vf scale=${quality.resolution}`,
+            `-hls_time 6`,
+            `-hls_list_size 0`,
+            `-hls_segment_filename ${qualityDir}/segment_%03d.ts`,
+            `-f hls`
+          ]);
+      });
+
+      command
+        .on("end", () => resolve())
+        .on("error", (err) => reject(err))
+        .run();
+    });
   }
 
   async convertVideoToHLS(s3Key, videoId) {
