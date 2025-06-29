@@ -1,4 +1,4 @@
-const { CloudWatchLogsClient, PutLogEventsCommand, CreateLogStreamCommand, DescribeLogStreamsCommand } = require('@aws-sdk/client-cloudwatch-logs');
+const { CloudWatchLogsClient, PutLogEventsCommand, CreateLogStreamCommand, DescribeLogStreamsCommand, CreateLogGroupCommand, DescribeLogGroupsCommand } = require('@aws-sdk/client-cloudwatch-logs');
 
 class CloudWatchLogger {
   constructor() {
@@ -9,10 +9,45 @@ class CloudWatchLogger {
     this.sequenceToken = null;
   }
 
+  async ensureLogGroup() {
+    try {
+      // Check if log group exists
+      const describeCommand = new DescribeLogGroupsCommand({
+        logGroupNamePrefix: this.logGroupName
+      });
+      
+      const groups = await this.client.send(describeCommand);
+      const existingGroup = groups.logGroups?.find(group => group.logGroupName === this.logGroupName);
+      
+      if (!existingGroup) {
+        // Create new log group
+        const createCommand = new CreateLogGroupCommand({
+          logGroupName: this.logGroupName
+        });
+        await this.client.send(createCommand);
+        console.log(`✅ Created CloudWatch log group: ${this.logGroupName}`);
+      } else {
+        console.log(`📊 Using existing CloudWatch log group: ${this.logGroupName}`);
+      }
+    } catch (error) {
+      console.error('❌ Error ensuring log group:', error);
+      console.error('   Error details:', {
+        name: error.name,
+        message: error.message,
+        code: error.$metadata?.httpStatusCode,
+        requestId: error.$metadata?.requestId
+      });
+      throw error;
+    }
+  }
+
   async ensureLogStream(videoId) {
     const streamName = `video-${videoId}`;
     
     try {
+      // First ensure log group exists
+      await this.ensureLogGroup();
+      
       // Check if stream exists
       const describeCommand = new DescribeLogStreamsCommand({
         logGroupName: this.logGroupName,
@@ -30,13 +65,23 @@ class CloudWatchLogger {
         });
         await this.client.send(createCommand);
         this.sequenceToken = null;
+        console.log(`✅ Created CloudWatch log stream: ${streamName}`);
       } else {
         this.sequenceToken = existingStream.uploadSequenceToken;
+        console.log(`📊 Using existing CloudWatch log stream: ${streamName}`);
       }
       
       return streamName;
     } catch (error) {
-      console.error('Error ensuring log stream:', error);
+      console.error('❌ Error ensuring log stream:', error);
+      console.error('   Error details:', {
+        name: error.name,
+        message: error.message,
+        code: error.$metadata?.httpStatusCode,
+        requestId: error.$metadata?.requestId,
+        videoId: videoId,
+        streamName: streamName
+      });
       throw error;
     }
   }
@@ -67,32 +112,53 @@ class CloudWatchLogger {
       
       console.log(`[${videoId}] Progress: ${message}${progress ? ` (${progress}%)` : ''}`);
     } catch (error) {
-      console.error('Error logging progress:', error);
+      console.error('❌ Error logging progress:', error);
+      console.error('   Error details:', {
+        name: error.name,
+        message: error.message,
+        code: error.$metadata?.httpStatusCode,
+        requestId: error.$metadata?.requestId,
+        videoId: videoId,
+        message: message,
+        progress: progress
+      });
       // Don't throw error to avoid breaking the main process
     }
   }
 
   async logStart(videoId, s3Key) {
+    console.log(`🚀 Starting video encoding for ${videoId}`);
     await this.logProgress(videoId, 'Video encoding started', 0);
   }
 
   async logDownload(videoId, progress) {
+    console.log(`📥 Download progress for ${videoId}: ${progress}%`);
     await this.logProgress(videoId, 'Downloading video from S3', progress);
   }
 
   async logConversion(videoId, quality, progress) {
+    console.log(`🔄 Conversion progress for ${videoId} (${quality}): ${progress}%`);
     await this.logProgress(videoId, `Converting to ${quality}`, progress);
   }
 
   async logUpload(videoId, progress) {
+    console.log(`📤 Upload progress for ${videoId}: ${progress}%`);
     await this.logProgress(videoId, 'Uploading HLS files to S3', progress);
   }
 
   async logComplete(videoId, streamingUrls) {
+    console.log(`✅ Video encoding completed for ${videoId}`);
     await this.logProgress(videoId, 'Video encoding completed successfully', 100);
   }
 
   async logError(videoId, error) {
+    console.error(`❌ Error in video encoding for ${videoId}:`, error.message);
+    console.error('   Full error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      videoId: videoId
+    });
     await this.logProgress(videoId, `Error: ${error.message}`, null);
   }
 }

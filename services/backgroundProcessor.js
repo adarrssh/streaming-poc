@@ -8,6 +8,9 @@ class BackgroundProcessor {
 
   async startEncodingJob(videoId, s3Key) {
     try {
+      console.log(`🚀 Starting encoding job for video: ${videoId}`);
+      console.log(`📁 S3 Key: ${s3Key}`);
+      
       // Check if job is already running
       if (this.activeJobs.has(videoId)) {
         throw new Error('Video encoding job already in progress');
@@ -34,28 +37,57 @@ class BackgroundProcessor {
       };
 
     } catch (error) {
-      console.error(`Error starting encoding job for ${videoId}:`, error);
+      console.error(`❌ Error starting encoding job for ${videoId}:`, error);
+      console.error('   Error details:', {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        videoId: videoId,
+        s3Key: s3Key
+      });
       this.activeJobs.delete(videoId);
       throw error;
     }
   }
 
   async processVideo(videoId, s3Key) {
+    let localVideoPath = null;
+    let outputDir = null;
+    
     try {
+      console.log(`🔄 Starting video processing for ${videoId}`);
+      
       // Update progress tracking
       const job = this.activeJobs.get(videoId);
-      if (!job) return;
+      if (!job) {
+        throw new Error('Job not found in active jobs');
+      }
 
       // Download phase (10% of total progress)
+      console.log(`📥 Starting download phase for ${videoId}`);
       await cloudWatchLogger.logDownload(videoId, 5);
       job.progress = 5;
       
-      const localVideoPath = await videoProcessor.downloadFromS3(s3Key);
+      try {
+        localVideoPath = await videoProcessor.downloadFromS3(s3Key);
+        console.log(`✅ Download completed for ${videoId}: ${localVideoPath}`);
+      } catch (downloadError) {
+        console.error(`❌ Download failed for ${videoId}:`, downloadError);
+        throw new Error(`Failed to download video from S3: ${downloadError.message}`);
+      }
+      
       await cloudWatchLogger.logDownload(videoId, 10);
       job.progress = 10;
 
       // Conversion phase (70% of total progress)
-      const outputDir = await videoProcessor.prepareOutputDir(videoId);
+      console.log(`🔄 Starting conversion phase for ${videoId}`);
+      try {
+        outputDir = await videoProcessor.prepareOutputDir(videoId);
+        console.log(`✅ Output directory prepared: ${outputDir}`);
+      } catch (dirError) {
+        console.error(`❌ Failed to prepare output directory for ${videoId}:`, dirError);
+        throw new Error(`Failed to prepare output directory: ${dirError.message}`);
+      }
       
       // Convert to different qualities with progress tracking
       const qualities = [
@@ -67,27 +99,49 @@ class BackgroundProcessor {
         const quality = qualities[i];
         const qualityProgress = 10 + (i * 30) + 15; // 10% base + 30% per quality + 15% for current quality
         
+        console.log(`🔄 Starting ${quality.name} conversion for ${videoId}`);
         await cloudWatchLogger.logConversion(videoId, quality.name, qualityProgress);
         job.progress = qualityProgress;
         
-        await videoProcessor.convertQuality(localVideoPath, outputDir, quality);
+        try {
+          await videoProcessor.convertQuality(localVideoPath, outputDir, quality);
+          console.log(`✅ ${quality.name} conversion completed for ${videoId}`);
+        } catch (conversionError) {
+          console.error(`❌ ${quality.name} conversion failed for ${videoId}:`, conversionError);
+          throw new Error(`Failed to convert to ${quality.name}: ${conversionError.message}`);
+        }
         
         await cloudWatchLogger.logConversion(videoId, quality.name, qualityProgress + 15);
         job.progress = qualityProgress + 15;
       }
 
       // Upload phase (20% of total progress)
+      console.log(`📤 Starting upload phase for ${videoId}`);
       await cloudWatchLogger.logUpload(videoId, 80);
       job.progress = 80;
       
       const s3Prefix = `hls/${videoId}`;
-      await videoProcessor.uploadToS3(outputDir, s3Prefix);
+      try {
+        await videoProcessor.uploadToS3(outputDir, s3Prefix);
+        console.log(`✅ S3 upload completed for ${videoId}`);
+      } catch (uploadError) {
+        console.error(`❌ S3 upload failed for ${videoId}:`, uploadError);
+        throw new Error(`Failed to upload HLS files to S3: ${uploadError.message}`);
+      }
       
       await cloudWatchLogger.logUpload(videoId, 90);
       job.progress = 90;
 
       // Generate master playlist
-      const masterS3Key = await videoProcessor.generateMasterPlaylist(outputDir, s3Prefix, videoId);
+      console.log(`📋 Generating master playlist for ${videoId}`);
+      let masterS3Key;
+      try {
+        masterS3Key = await videoProcessor.generateMasterPlaylist(outputDir, s3Prefix, videoId);
+        console.log(`✅ Master playlist generated: ${masterS3Key}`);
+      } catch (playlistError) {
+        console.error(`❌ Master playlist generation failed for ${videoId}:`, playlistError);
+        throw new Error(`Failed to generate master playlist: ${playlistError.message}`);
+      }
       
       const streamingUrls = {
         master: `https://${process.env.BUCKET_NAME}.s3.amazonaws.com/${masterS3Key}`,
@@ -98,7 +152,14 @@ class BackgroundProcessor {
       };
 
       // Cleanup
-      await videoProcessor.cleanup(localVideoPath, outputDir);
+      console.log(`🧹 Starting cleanup for ${videoId}`);
+      try {
+        await videoProcessor.cleanup(localVideoPath, outputDir);
+        console.log(`✅ Cleanup completed for ${videoId}`);
+      } catch (cleanupError) {
+        console.warn(`⚠️ Cleanup warning for ${videoId}:`, cleanupError);
+        // Don't throw error for cleanup failures
+      }
 
       // Mark as complete
       await cloudWatchLogger.logComplete(videoId, streamingUrls);
@@ -107,10 +168,20 @@ class BackgroundProcessor {
       job.endTime = new Date();
       job.streamingUrls = streamingUrls;
 
-      console.log(`✅ Video encoding completed for ${videoId}`);
+      console.log(`🎉 Video encoding completed successfully for ${videoId}`);
+      console.log(`📺 Streaming URLs:`, streamingUrls);
 
     } catch (error) {
       console.error(`❌ Error processing video ${videoId}:`, error);
+      console.error('   Error details:', {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        videoId: videoId,
+        s3Key: s3Key,
+        localVideoPath: localVideoPath,
+        outputDir: outputDir
+      });
       
       const job = this.activeJobs.get(videoId);
       if (job) {
