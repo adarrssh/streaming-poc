@@ -38,7 +38,7 @@ app.use(helmet());
 // CORS configuration
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://stream-your-videos.netlify.app/'] 
+    ? ['https://stream-your-videos.netlify.app'] 
     : ['http://localhost:5000', 'http://localhost:5001', 'http://localhost:3000'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
