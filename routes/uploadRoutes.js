@@ -5,6 +5,8 @@ const { v4: uuidv4 } = require('uuid');
 const { s3, BUCKET_NAME, generateUploadUrl, fileExists, getFileMetadata } = require('../config/aws');
 const videoProcessor = require('../services/videoProcessor');
 const backgroundProcessor = require('../services/backgroundProcessor');
+const { authenticate } = require('../middleware/auth');
+const Video = require('../models/Video');
 
 const router = express.Router();
 
@@ -44,8 +46,8 @@ const upload = multer({
   }
 });
 
-// Upload video endpoint
-router.post('/video', upload.single('video'), async (req, res) => {
+// Upload video endpoint (requires authentication)
+router.post('/video', authenticate, upload.single('video'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No video file provided' });
@@ -53,31 +55,47 @@ router.post('/video', upload.single('video'), async (req, res) => {
 
     const videoId = uuidv4(); // Generate unique video ID
 
-    const videoData = {
-      id: videoId,
+    // Create video record in database
+    const video = new Video({
+      videoId: videoId,
+      userId: req.user._id,
       filename: req.file.key,
       originalName: req.file.originalname,
       size: req.file.size,
       mimetype: req.file.mimetype,
       url: req.file.location,
-      uploadedAt: new Date().toISOString(),
+      s3Key: req.file.key,
       metadata: req.file.metadata,
-      s3Key: req.file.key // Store S3 key for later use
-    };
+      status: 'uploaded'
+    });
 
     // Get additional metadata from S3
     try {
       const s3Metadata = await getFileMetadata(req.file.key);
       if (s3Metadata) {
-        videoData.s3Metadata = s3Metadata;
+        video.s3Metadata = s3Metadata;
       }
     } catch (metadataError) {
       console.warn('Could not fetch S3 metadata:', metadataError.message);
     }
 
+    // Save video to database
+    await video.save();
+
     res.status(201).json({
       message: 'Video uploaded successfully',
-      video: videoData,
+      video: {
+        id: video.videoId,
+        filename: video.filename,
+        originalName: video.originalName,
+        size: video.size,
+        mimetype: video.mimetype,
+        url: video.url,
+        status: video.status,
+        uploadedAt: video.createdAt,
+        metadata: video.metadata,
+        s3Key: video.s3Key
+      },
       nextSteps: {
         convertToHls: `POST /api/upload/convert-to-hls/${videoId}`,
         body: { s3Key: req.file.key }
@@ -93,8 +111,8 @@ router.post('/video', upload.single('video'), async (req, res) => {
   }
 });
 
-// Convert video to HLS endpoint (now asynchronous)
-router.post('/convert-to-hls/:videoId', async (req, res) => {
+// Convert video to HLS endpoint (requires authentication)
+router.post('/convert-to-hls/:videoId', authenticate, async (req, res) => {
   try {
     const { videoId } = req.params;
     const { s3Key } = req.body;
@@ -105,6 +123,14 @@ router.post('/convert-to-hls/:videoId', async (req, res) => {
       });
     }
 
+    // Check if video exists in database and belongs to user
+    const video = await Video.findOne({ videoId: videoId, userId: req.user._id });
+    if (!video) {
+      return res.status(404).json({ 
+        error: 'Video not found or access denied' 
+      });
+    }
+
     // Check if video exists in S3
     const exists = await fileExists(s3Key);
     if (!exists) {
@@ -112,6 +138,11 @@ router.post('/convert-to-hls/:videoId', async (req, res) => {
         error: 'Video not found in S3' 
       });
     }
+
+    // Update video status to processing
+    video.status = 'processing';
+    video.encodingStartedAt = new Date();
+    await video.save();
 
     // Start background encoding job
     const result = await backgroundProcessor.startEncodingJob(videoId, s3Key);
@@ -133,13 +164,40 @@ router.post('/convert-to-hls/:videoId', async (req, res) => {
   }
 });
 
-// Get encoding status for a video
-router.get('/status/:videoId', async (req, res) => {
+// Get encoding status for a video (requires authentication)
+router.get('/status/:videoId', authenticate, async (req, res) => {
   try {
     const { videoId } = req.params;
-    const status = backgroundProcessor.getJobStatus(videoId);
+    
+    // First check if video belongs to user
+    const video = await Video.findOne({ 
+      videoId: videoId, 
+      userId: req.user._id 
+    });
 
-    res.json(status);
+    if (!video) {
+      return res.status(404).json({ 
+        error: 'Video not found or access denied' 
+      });
+    }
+
+    // Get status from background processor
+    const status = backgroundProcessor.getJobStatus(videoId);
+    
+    // Combine database and background processor status
+    const combinedStatus = {
+      videoId: videoId,
+      status: video.status,
+      progress: video.encodingProgress,
+      startTime: video.encodingStartedAt,
+      endTime: video.encodingCompletedAt,
+      streamingUrls: video.streamingUrls,
+      error: video.error,
+      // Include background processor status if different
+      backgroundStatus: status.status !== 'not_found' ? status : null
+    };
+
+    res.json(combinedStatus);
 
   } catch (error) {
     console.error('Error getting status:', error);
@@ -150,10 +208,31 @@ router.get('/status/:videoId', async (req, res) => {
   }
 });
 
-// Get all active encoding jobs
-router.get('/jobs', async (req, res) => {
+// Get user's active encoding jobs
+router.get('/jobs', authenticate, async (req, res) => {
   try {
-    const jobs = backgroundProcessor.getAllJobs();
+    // Get user's videos that are currently processing
+    const processingVideos = await Video.find({ 
+      userId: req.user._id,
+      status: 'processing'
+    }).select('videoId originalName encodingProgress encodingStartedAt');
+
+    // Get background processor status for these videos
+    const jobs = [];
+    for (const video of processingVideos) {
+      const status = backgroundProcessor.getJobStatus(video.videoId);
+      if (status.status !== 'not_found') {
+        jobs.push({
+          videoId: video.videoId,
+          originalName: video.originalName,
+          status: status.status,
+          progress: status.progress,
+          startTime: status.startTime,
+          endTime: status.endTime
+        });
+      }
+    }
+
     res.json({
       totalJobs: jobs.length,
       jobs: jobs
@@ -168,12 +247,24 @@ router.get('/jobs', async (req, res) => {
   }
 });
 
-// Get streaming URLs for a video
-router.get('/streaming/:videoId', async (req, res) => {
+// Get streaming URLs for a video (requires authentication)
+router.get('/streaming/:videoId', authenticate, async (req, res) => {
   try {
     const { videoId } = req.params;
     
-    // First check if encoding is complete
+    // First check if video belongs to user
+    const video = await Video.findOne({ 
+      videoId: videoId, 
+      userId: req.user._id 
+    });
+
+    if (!video) {
+      return res.status(404).json({ 
+        error: 'Video not found or access denied' 
+      });
+    }
+    
+    // Check if encoding is complete
     const status = backgroundProcessor.getJobStatus(videoId);
     
     if (status.status === 'processing') {
@@ -277,6 +368,112 @@ router.post('/presigned-url', async (req, res) => {
     console.error('Error generating pre-signed URL:', error);
     res.status(500).json({ 
       error: 'Failed to generate upload URL',
+      message: error.message 
+    });
+  }
+});
+
+// Get user's videos (requires authentication)
+router.get('/videos', authenticate, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const status = req.query.status; // Optional filter by status
+    const skip = (page - 1) * limit;
+
+    // Build query
+    const query = { userId: req.user._id };
+    if (status) {
+      query.status = status;
+    }
+
+    // Get videos with pagination
+    const videos = await Video.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .select('-__v');
+
+    // Get total count for pagination
+    const total = await Video.countDocuments(query);
+
+    // Format response
+    const formattedVideos = videos.map(video => ({
+      id: video.videoId,
+      originalName: video.originalName,
+      size: video.size,
+      mimetype: video.mimetype,
+      status: video.status,
+      encodingProgress: video.encodingProgress,
+      uploadedAt: video.createdAt,
+      encodingStartedAt: video.encodingStartedAt,
+      encodingCompletedAt: video.encodingCompletedAt,
+      error: video.error,
+      streamingUrls: video.streamingUrls,
+      url: video.url
+    }));
+
+    res.json({
+      videos: formattedVideos,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasNext: page * limit < total,
+        hasPrev: page > 1
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching videos:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch videos',
+      message: error.message 
+    });
+  }
+});
+
+// Get specific video details (requires authentication)
+router.get('/videos/:videoId', authenticate, async (req, res) => {
+  try {
+    const { videoId } = req.params;
+
+    const video = await Video.findOne({ 
+      videoId: videoId, 
+      userId: req.user._id 
+    }).select('-__v');
+
+    if (!video) {
+      return res.status(404).json({ 
+        error: 'Video not found or access denied' 
+      });
+    }
+
+    // Format response
+    const formattedVideo = {
+      id: video.videoId,
+      originalName: video.originalName,
+      size: video.size,
+      mimetype: video.mimetype,
+      status: video.status,
+      encodingProgress: video.encodingProgress,
+      uploadedAt: video.createdAt,
+      encodingStartedAt: video.encodingStartedAt,
+      encodingCompletedAt: video.encodingCompletedAt,
+      error: video.error,
+      streamingUrls: video.streamingUrls,
+      url: video.url,
+      metadata: video.metadata,
+      s3Metadata: video.s3Metadata
+    };
+
+    res.json(formattedVideo);
+
+  } catch (error) {
+    console.error('Error fetching video:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch video',
       message: error.message 
     });
   }

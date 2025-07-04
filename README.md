@@ -6,11 +6,14 @@ A Node.js service for uploading videos to AWS S3 and converting them to HLS form
 
 ## Features
 
-- Video upload to AWS S3
-- HLS video conversion with multiple qualities
-- Streaming URLs generation
-- EC2 optimized processing
-- Pre-signed URL uploads
+- **User Authentication**: JWT-based authentication with user-specific video management
+- **Video upload to AWS S3**: Secure upload with user ownership tracking
+- **HLS video conversion with multiple qualities**: 360p and 720p streaming
+- **Streaming URLs generation**: Ready-to-use HLS streaming URLs
+- **EC2 optimized processing**: Background processing with progress tracking
+- **Pre-signed URL uploads**: Direct S3 upload support
+- **User-specific video library**: Each user can only access their own videos
+- **Real-time encoding status**: Track encoding progress in real-time
 
 ## Prerequisites
 
@@ -82,16 +85,48 @@ Allow inbound traffic on port 3000 (or your chosen port) from your IP address.
 npm start
 ```
 
+## Authentication
+
+All video-related endpoints require authentication. You need to include a JWT token in the Authorization header:
+
+```bash
+Authorization: Bearer your-jwt-token
+```
+
+### Getting a JWT Token
+
+First, you need to register/login using the auth endpoints:
+
+```bash
+# Register a new user
+curl -X POST http://your-ec2-ip:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "your-username",
+    "email": "your-email@example.com",
+    "password": "your-password"
+  }'
+
+# Login to get JWT token
+curl -X POST http://your-ec2-ip:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "your-email@example.com",
+    "password": "your-password"
+  }'
+```
+
 ## API Endpoints
 
 ### 1. Upload Video
 
-**POST** `/api/upload/video`
+**POST** `/api/upload/video` *(Requires Authentication)*
 
-Upload a video file directly to S3.
+Upload a video file directly to S3. The video will be associated with the authenticated user.
 
 ```bash
 curl -X POST http://your-ec2-ip:3000/api/upload/video \
+  -H "Authorization: Bearer your-jwt-token" \
   -F "video=@your-video.mp4"
 ```
 
@@ -180,15 +215,111 @@ curl -X POST http://your-ec2-ip:3000/api/upload/presigned-url \
   -d '{"filename": "video.mp4", "contentType": "video/mp4"}'
 ```
 
-### 5. Check Upload Status
+### 5. Get User's Videos
+
+**GET** `/api/upload/videos` *(Requires Authentication)*
+
+Get all videos belonging to the authenticated user with pagination and filtering.
+
+```bash
+# Get all videos
+curl -H "Authorization: Bearer your-jwt-token" \
+  http://your-ec2-ip:3000/api/upload/videos
+
+# Filter by status
+curl -H "Authorization: Bearer your-jwt-token" \
+  http://your-ec2-ip:3000/api/upload/videos?status=completed
+
+# Pagination
+curl -H "Authorization: Bearer your-jwt-token" \
+  http://your-ec2-ip:3000/api/upload/videos?page=1&limit=5
+```
+
+**Response:**
+```json
+{
+  "videos": [
+    {
+      "id": "video-uuid",
+      "originalName": "my-video.mp4",
+      "size": 1234567,
+      "mimetype": "video/mp4",
+      "status": "completed",
+      "encodingProgress": 100,
+      "uploadedAt": "2024-01-01T00:00:00.000Z",
+      "encodingStartedAt": "2024-01-01T00:01:00.000Z",
+      "encodingCompletedAt": "2024-01-01T00:05:00.000Z",
+      "streamingUrls": {
+        "master": "https://bucket.s3.amazonaws.com/hls/video-uuid/master.m3u8",
+        "qualities": {
+          "360p": "https://bucket.s3.amazonaws.com/hls/video-uuid/360p/playlist.m3u8",
+          "720p": "https://bucket.s3.amazonaws.com/hls/video-uuid/720p/playlist.m3u8"
+        }
+      }
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 25,
+    "pages": 3,
+    "hasNext": true,
+    "hasPrev": false
+  }
+}
+```
+
+### 6. Get Specific Video
+
+**GET** `/api/upload/videos/:videoId` *(Requires Authentication)*
+
+Get detailed information about a specific video (must belong to the authenticated user).
+
+```bash
+curl -H "Authorization: Bearer your-jwt-token" \
+  http://your-ec2-ip:3000/api/upload/videos/video-uuid
+```
+
+### 7. Get Encoding Status
+
+**GET** `/api/upload/status/:videoId` *(Requires Authentication)*
+
+Get the encoding status and progress for a specific video.
+
+```bash
+curl -H "Authorization: Bearer your-jwt-token" \
+  http://your-ec2-ip:3000/api/upload/status/video-uuid
+```
+
+**Response:**
+```json
+{
+  "videoId": "video-uuid",
+  "status": "processing",
+  "progress": 45,
+  "startTime": "2024-01-01T00:01:00.000Z",
+  "endTime": null,
+  "streamingUrls": null,
+  "error": null
+}
+```
+
+### 8. Get Active Encoding Jobs
+
+**GET** `/api/upload/jobs` *(Requires Authentication)*
+
+Get all active encoding jobs for the authenticated user.
+
+```bash
+curl -H "Authorization: Bearer your-jwt-token" \
+  http://your-ec2-ip:3000/api/upload/jobs
+```
+
+### 9. Check Upload Status
 
 **GET** `/api/upload/status/:key`
 
 Check if a file exists in S3.
-
-```bash
-curl http://your-ec2-ip:3000/api/upload/status/videos/1234567890-abc123.mp4
-```
 
 ## S3 File Structure
 

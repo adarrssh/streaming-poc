@@ -1,5 +1,6 @@
 const videoProcessor = require('./videoProcessor');
 const cloudWatchLogger = require('./cloudWatchLogger');
+const Video = require('../models/Video');
 
 class BackgroundProcessor {
   constructor() {
@@ -68,6 +69,16 @@ class BackgroundProcessor {
       await cloudWatchLogger.logDownload(videoId, 5);
       job.progress = 5;
       
+      // Update database with progress
+      try {
+        await Video.findOneAndUpdate(
+          { videoId: videoId },
+          { encodingProgress: 5 }
+        );
+      } catch (dbError) {
+        console.warn(`⚠️ Failed to update progress in database for ${videoId}:`, dbError);
+      }
+      
       try {
         localVideoPath = await videoProcessor.downloadFromS3(s3Key);
         console.log(`✅ Download completed for ${videoId}: ${localVideoPath}`);
@@ -103,6 +114,16 @@ class BackgroundProcessor {
         await cloudWatchLogger.logConversion(videoId, quality.name, qualityProgress);
         job.progress = qualityProgress;
         
+        // Update database with progress
+        try {
+          await Video.findOneAndUpdate(
+            { videoId: videoId },
+            { encodingProgress: qualityProgress }
+          );
+        } catch (dbError) {
+          console.warn(`⚠️ Failed to update progress in database for ${videoId}:`, dbError);
+        }
+        
         try {
           await videoProcessor.convertQuality(localVideoPath, outputDir, quality);
           console.log(`✅ ${quality.name} conversion completed for ${videoId}`);
@@ -113,12 +134,32 @@ class BackgroundProcessor {
         
         await cloudWatchLogger.logConversion(videoId, quality.name, qualityProgress + 15);
         job.progress = qualityProgress + 15;
+        
+        // Update database with progress
+        try {
+          await Video.findOneAndUpdate(
+            { videoId: videoId },
+            { encodingProgress: qualityProgress + 15 }
+          );
+        } catch (dbError) {
+          console.warn(`⚠️ Failed to update progress in database for ${videoId}:`, dbError);
+        }
       }
 
       // Upload phase (20% of total progress)
       console.log(`📤 Starting upload phase for ${videoId}`);
       await cloudWatchLogger.logUpload(videoId, 80);
       job.progress = 80;
+      
+      // Update database with progress
+      try {
+        await Video.findOneAndUpdate(
+          { videoId: videoId },
+          { encodingProgress: 80 }
+        );
+      } catch (dbError) {
+        console.warn(`⚠️ Failed to update progress in database for ${videoId}:`, dbError);
+      }
       
       const s3Prefix = `hls/${videoId}`;
       try {
@@ -131,6 +172,16 @@ class BackgroundProcessor {
       
       await cloudWatchLogger.logUpload(videoId, 90);
       job.progress = 90;
+      
+      // Update database with progress
+      try {
+        await Video.findOneAndUpdate(
+          { videoId: videoId },
+          { encodingProgress: 90 }
+        );
+      } catch (dbError) {
+        console.warn(`⚠️ Failed to update progress in database for ${videoId}:`, dbError);
+      }
 
       // Generate master playlist
       console.log(`📋 Generating master playlist for ${videoId}`);
@@ -168,6 +219,24 @@ class BackgroundProcessor {
       job.endTime = new Date();
       job.streamingUrls = streamingUrls;
 
+      // Update video status in database
+      try {
+        await Video.findOneAndUpdate(
+          { videoId: videoId },
+          {
+            status: 'completed',
+            encodingProgress: 100,
+            encodingCompletedAt: new Date(),
+            streamingUrls: streamingUrls,
+            error: null
+          }
+        );
+        console.log(`✅ Database updated for ${videoId}`);
+      } catch (dbError) {
+        console.warn(`⚠️ Failed to update database for ${videoId}:`, dbError);
+        // Don't throw error for database update failures
+      }
+
       console.log(`🎉 Video encoding completed successfully for ${videoId}`);
       console.log(`📺 Streaming URLs:`, streamingUrls);
 
@@ -188,6 +257,22 @@ class BackgroundProcessor {
         job.status = 'failed';
         job.error = error.message;
         job.endTime = new Date();
+      }
+
+      // Update video status in database
+      try {
+        await Video.findOneAndUpdate(
+          { videoId: videoId },
+          {
+            status: 'failed',
+            encodingProgress: job ? job.progress : 0,
+            error: error.message
+          }
+        );
+        console.log(`✅ Database updated for failed ${videoId}`);
+      } catch (dbError) {
+        console.warn(`⚠️ Failed to update database for failed ${videoId}:`, dbError);
+        // Don't throw error for database update failures
       }
 
       await cloudWatchLogger.logError(videoId, error);
