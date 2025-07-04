@@ -410,7 +410,8 @@ router.get('/videos', authenticate, async (req, res) => {
       encodingCompletedAt: video.encodingCompletedAt,
       error: video.error,
       streamingUrls: video.streamingUrls,
-      url: video.url
+      url: video.url,
+      s3Key: video.s3Key
     }));
 
     res.json({
@@ -464,6 +465,7 @@ router.get('/videos/:videoId', authenticate, async (req, res) => {
       error: video.error,
       streamingUrls: video.streamingUrls,
       url: video.url,
+      s3Key: video.s3Key,
       metadata: video.metadata,
       s3Metadata: video.s3Metadata
     };
