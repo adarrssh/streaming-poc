@@ -1,6 +1,7 @@
 const videoProcessor = require('./videoProcessor');
 const cloudWatchLogger = require('./cloudWatchLogger');
 const Video = require('../models/Video');
+const { BUCKET_NAME } = require('../config/aws');
 
 class BackgroundProcessor {
   constructor() {
@@ -195,10 +196,10 @@ class BackgroundProcessor {
       }
       
       const streamingUrls = {
-        master: `https://${process.env.BUCKET_NAME}.s3.amazonaws.com/${masterS3Key}`,
+        master: `https://${BUCKET_NAME}.s3.amazonaws.com/${masterS3Key}`,
         qualities: {
-          "360p": `https://${process.env.BUCKET_NAME}.s3.amazonaws.com/${s3Prefix}/360p/playlist.m3u8`,
-          "720p": `https://${process.env.BUCKET_NAME}.s3.amazonaws.com/${s3Prefix}/720p/playlist.m3u8`
+          "360p": `https://${BUCKET_NAME}.s3.amazonaws.com/${s3Prefix}/360p/playlist.m3u8`,
+          "720p": `https://${BUCKET_NAME}.s3.amazonaws.com/${s3Prefix}/720p/playlist.m3u8`
         }
       };
 
