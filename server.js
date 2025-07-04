@@ -149,7 +149,7 @@ io.on('connection', (socket) => {
    * 4. Notify other participants
    * 5. Send initial video state to new viewers
    */
-  socket.on('join', ({ roomId, role, userInfo }) => {
+  socket.on('join', ({ roomId, role, userInfo, videoUrl }) => {
     console.log(`[JOIN ATTEMPT] socket.id=${socket.id}, role=${role}, roomId=${roomId}, user=${userInfo?.username || 'Unknown'}`);
     
     // Validate required parameters
@@ -169,7 +169,8 @@ io.on('connection', (socket) => {
       rooms[roomId] = { 
         host: null, 
         viewers: new Set(),
-        videoState: { isPlaying: false, currentTime: 0 }
+        videoState: { isPlaying: false, currentTime: 0 },
+        videoUrl: null
       };
     }
     
@@ -177,7 +178,14 @@ io.on('connection', (socket) => {
     if (role === 'host') {
       rooms[roomId].host = socket.id;
       isHost = true;
-      console.log(`[HOST JOINED] socket.id=${socket.id}, roomId=${roomId}, user=${socket.username}`);
+      
+      // Store video URL if provided by host
+      if (videoUrl) {
+        rooms[roomId].videoUrl = videoUrl;
+        console.log(`[VIDEO URL STORED] Room ${roomId}: ${videoUrl}`);
+      }
+      
+      console.log(`[HOST JOINED] socket.id=${socket.id}, roomId=${roomId}, user=${socket.username}, videoUrl=${videoUrl}`);
       
       // Send current viewers list to the host
       socket.emit('viewers-list', { viewers: Array.from(rooms[roomId].viewers) });
@@ -198,10 +206,18 @@ io.on('connection', (socket) => {
         io.to(hostId).emit('request-video-state', { viewerId: socket.id });
       }
       
-      // Send current video state to the new viewer (fallback)
-      // This provides immediate sync even if host doesn't respond
+      // Send current video state and video URL to the new viewer
       const currentVideoState = rooms[roomId].videoState;
-      socket.emit('initial-sync', currentVideoState);
+      const initialSyncData = {
+        ...currentVideoState,
+        videoUrl: rooms[roomId].videoUrl
+      };
+      socket.emit('initial-sync', initialSyncData);
+      
+      if (rooms[roomId].videoUrl) {
+        console.log(`[VIDEO URL SENT] To viewer ${socket.id}: ${rooms[roomId].videoUrl}`);
+      }
+      
       console.log(`[INITIAL SYNC] Sent to viewer ${socket.id}:`, currentVideoState);
       console.log(`[ROOM STATE] Room ${roomId} state:`, rooms[roomId]);
     }
