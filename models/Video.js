@@ -59,6 +59,10 @@ const videoSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
+  displayName: {
+    type: String,
+    default: ''
+  },
   encodingStartedAt: {
     type: Date,
     default: null

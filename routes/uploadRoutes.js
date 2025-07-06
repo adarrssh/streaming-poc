@@ -55,6 +55,20 @@ router.post('/video', authenticate, upload.single('video'), async (req, res) => 
 
     const videoId = uuidv4(); // Generate unique video ID
 
+    console.log({
+      videoId: videoId,
+      userId: req.user._id,
+      filename: req.file.key,
+      originalName: req.file.originalname,
+      size: req.file.size,
+      mimetype: req.file.mimetype,
+      url: req.file.location,
+      s3Key: req.file.key,
+      metadata: req.file.metadata,
+      status: 'uploaded',
+      displayName: req.body.displayName || ''
+    });
+
     // Create video record in database
     const video = new Video({
       videoId: videoId,
@@ -66,7 +80,8 @@ router.post('/video', authenticate, upload.single('video'), async (req, res) => 
       url: req.file.location,
       s3Key: req.file.key,
       metadata: req.file.metadata,
-      status: 'uploaded'
+      status: 'uploaded',
+      displayName: req.body.displayName || ''
     });
 
     // Get additional metadata from S3
@@ -400,6 +415,7 @@ router.get('/videos', authenticate, async (req, res) => {
     // Format response
     const formattedVideos = videos.map(video => ({
       id: video.videoId,
+      displayName: video.displayName,
       originalName: video.originalName,
       size: video.size,
       mimetype: video.mimetype,
@@ -454,6 +470,7 @@ router.get('/videos/:videoId', authenticate, async (req, res) => {
     // Format response
     const formattedVideo = {
       id: video.videoId,
+      displayName: video.displayName,
       originalName: video.originalName,
       size: video.size,
       mimetype: video.mimetype,
