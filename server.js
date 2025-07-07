@@ -125,10 +125,10 @@ const io = new Server(server, {
  * 
  * Each room contains:
  * - host: Socket ID of the room host (only one per room)
- * - viewers: Set of viewer socket IDs (multiple viewers allowed)
+ * - viewers: Set of viewer objects with { id: socketId, username: string } (multiple viewers allowed)
  * - videoState: Current state of video playback (isPlaying, currentTime)
  * 
- * Structure: { [roomId]: { host: socketId, viewers: Set<socketId>, videoState: { isPlaying: boolean, currentTime: number } } }
+ * Structure: { [roomId]: { host: socketId, viewers: Set<{id: string, username: string}>, videoState: { isPlaying: boolean, currentTime: number } } }
  */
 const rooms = {};
 
@@ -185,21 +185,28 @@ io.on('connection', (socket) => {
         console.log(`[VIDEO URL STORED] Room ${roomId}: ${videoUrl}`);
       }
       
+      // Add host to viewers list
+      const hostObj = { id: socket.id, username: socket.username };
+      rooms[roomId].viewers.add(hostObj);
+      
       console.log(`[HOST JOINED] socket.id=${socket.id}, roomId=${roomId}, user=${socket.username}, videoUrl=${videoUrl}`);
       
-      // Send current viewers list to the host
+      // Send current viewers list to the host (including themselves)
       socket.emit('viewers-list', { viewers: Array.from(rooms[roomId].viewers) });
     } 
     // Handle viewer joining
     else {
-      rooms[roomId].viewers.add(socket.id);
+      // Add viewer object with id and username to the Set
+      const viewerObj = { id: socket.id, username: socket.username };
+      rooms[roomId].viewers.add(viewerObj);
       console.log(`[VIEWER JOINED] socket.id=${socket.id}, roomId=${roomId}, user=${socket.username}`);
       
       const hostId = rooms[roomId].host;
       if (hostId) {
         // Notify host about new viewer
-        io.to(hostId).emit('viewer-joined', { viewerId: socket.id, roomId });
-        io.to(hostId).emit('viewers-list', { viewers: Array.from(rooms[roomId].viewers) });
+        console.log('viewer-joined', { viewerId: socket.id, roomId, username: socket.username });
+        console.log('viewers-list', { viewers: Array.from(rooms[roomId].viewers) });
+        io.to(hostId).emit('viewer-joined', { viewerId: socket.id, roomId, username: socket.username });
         
         // Request current video state from host for the new viewer
         // This ensures the viewer gets the most up-to-date state
@@ -224,6 +231,12 @@ io.on('connection', (socket) => {
     
     // Join the socket to the room for broadcasting
     socket.join(roomId);
+    
+    // Send viewers list to the new participant
+    socket.emit('viewers-list', { viewers: Array.from(rooms[roomId].viewers) });
+    
+    // Send updated viewers list to all other participants in the room
+    socket.to(roomId).emit('viewers-list', { viewers: Array.from(rooms[roomId].viewers) });
     
     // Notify all users in the room about the new user joining (for chat)
     socket.to(roomId).emit('user-joined-chat', {
@@ -349,18 +362,33 @@ io.on('connection', (socket) => {
         // Host disconnected
         rooms[joinedRoom].host = null;
         
+        // Remove host from viewers list
+        const hostToRemove = Array.from(rooms[joinedRoom].viewers).find(v => v.id === socket.id);
+        if (hostToRemove) {
+          rooms[joinedRoom].viewers.delete(hostToRemove);
+        }
+        
         // Notify all viewers that host has left
         io.to(joinedRoom).emit('user-left', { role: 'host', socketId: socket.id });
+        
+        // Send updated viewers list to all remaining participants
+        io.to(joinedRoom).emit('viewers-list', { viewers: Array.from(rooms[joinedRoom].viewers) });
         io.to(joinedRoom).emit('user-left-chat', userInfo);
       } else {
-        // Viewer disconnected
-        rooms[joinedRoom].viewers.delete(socket.id);
+        // Viewer disconnected - remove from viewers Set by finding the object with matching id
+        const viewerToRemove = Array.from(rooms[joinedRoom].viewers).find(v => v.id === socket.id);
+        if (viewerToRemove) {
+          rooms[joinedRoom].viewers.delete(viewerToRemove);
+        }
         
         // Notify host that viewer has left
         const hostId = rooms[joinedRoom].host;
         if (hostId) {
           io.to(hostId).emit('user-left', { role: 'viewer', socketId: socket.id });
         }
+        
+        // Send updated viewers list to all participants in the room
+        io.to(joinedRoom).emit('viewers-list', { viewers: Array.from(rooms[joinedRoom].viewers) });
         io.to(joinedRoom).emit('user-left-chat', userInfo);
       }
       
