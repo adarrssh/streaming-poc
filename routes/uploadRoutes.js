@@ -391,10 +391,7 @@ router.post('/presigned-url', async (req, res) => {
 // Get user's videos (requires authentication)
 router.get('/videos', authenticate, async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
     const status = req.query.status; // Optional filter by status
-    const skip = (page - 1) * limit;
 
     // Build query
     const query = { userId: req.user._id };
@@ -402,15 +399,10 @@ router.get('/videos', authenticate, async (req, res) => {
       query.status = status;
     }
 
-    // Get videos with pagination
+    // Get all videos for the user (no pagination)
     const videos = await Video.find(query)
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
       .select('-__v');
-
-    // Get total count for pagination
-    const total = await Video.countDocuments(query);
 
     // Format response
     const formattedVideos = videos.map(video => ({
@@ -431,15 +423,7 @@ router.get('/videos', authenticate, async (req, res) => {
     }));
 
     res.json({
-      videos: formattedVideos,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-        hasNext: page * limit < total,
-        hasPrev: page > 1
-      }
+      videos: formattedVideos
     });
 
   } catch (error) {
@@ -495,6 +479,30 @@ router.get('/videos/:videoId', authenticate, async (req, res) => {
       error: 'Failed to fetch video',
       message: error.message 
     });
+  }
+});
+
+// Delete a video (requires authentication)
+router.delete('/videos/:videoId', authenticate, async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    // Find the video by videoId and userId
+    const video = await Video.findOne({ videoId: videoId, userId: req.user._id });
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found or access denied' });
+    }
+    // Delete from S3
+    try {
+      await s3.deleteObject({ Bucket: BUCKET_NAME, Key: video.s3Key }).promise();
+    } catch (s3Error) {
+      console.warn('Failed to delete from S3:', s3Error.message);
+    }
+    // Delete from database
+    await Video.deleteOne({ videoId: videoId, userId: req.user._id });
+    res.json({ message: 'Video deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting video:', error);
+    res.status(500).json({ error: 'Failed to delete video', message: error.message });
   }
 });
 
